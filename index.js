@@ -2,13 +2,12 @@ const makeWASocket = require('@whiskeysockets/baileys').default;
 const { useMultiFileAuthState } = require('@whiskeysockets/baileys');
 const fs = require("fs");
 const path = require("path");
-const P = { printQRInTerminal: true };   // ✅ QR Code enabled
 require("dotenv").config();
 
 const PREFIX = process.env.PREFIX || "!";
 const OWNER = process.env.OWNER_NUMBER;
 
-// Load all commands dynamically
+// Load commands
 function loadCommands() {
   const commands = {};
   const dirPath = path.join(__dirname, "commands");
@@ -28,33 +27,49 @@ async function startBot() {
 
   const sock = makeWASocket({
     auth: state,
-    ...P   // ✅ PRINT QR FIX
+    printQRInTerminal: true,  // ✓ Forces QR to show in console again
+    browser: ["Mac OS", "Chrome", "14.1"],
   });
 
   sock.ev.on("creds.update", saveCreds);
 
   const commands = loadCommands();
 
+  sock.ev.on("connection.update", ({ connection, lastDisconnect, qr }) => {
+    if (qr) {
+      console.log("SCAN THIS QR CODE WITH WHATSAPP:");
+      console.log(qr);
+    }
+    if (connection === "open") console.log("BOT CONNECTED ✔");
+    if (connection === "close") {
+      console.log("Connection closed. Reconnecting...");
+      startBot();
+    }
+  });
+
   sock.ev.on("messages.upsert", async ({ messages }) => {
     const msg = messages[0];
     if (!msg.message) return;
 
-    const text = msg.message.conversation || "";
+    const from = msg.key.remoteJid;
+    let text = msg.message.conversation || msg.message.extendedTextMessage?.text;
+    if (!text) return;
+
     if (!text.startsWith(PREFIX)) return;
 
     const args = text.slice(PREFIX.length).trim().split(/ +/);
-    const cmdName = args.shift().toLowerCase();
+    const commandName = args.shift().toLowerCase();
 
-    if (commands[cmdName]) {
-      try {
-        await commands[cmdName].execute(sock, msg, args);
-      } catch (err) {
-        console.log("Command error:", err);
-      }
+    const command = commands[commandName];
+    if (!command) return;
+
+    try {
+      await command.run({ sock, msg, from, args });
+    } catch (err) {
+      console.log("Command error:", err);
+      await sock.sendMessage(from, { text: "❌ Error running command." });
     }
   });
-
-  console.log("Bot started successfully.");
 }
 
 startBot();
