@@ -2,6 +2,7 @@ const makeWASocket = require('@whiskeysockets/baileys').default;
 const { useMultiFileAuthState } = require('@whiskeysockets/baileys');
 const fs = require("fs");
 const path = require("path");
+const P = { printQRInTerminal: true };   // ✅ QR Code enabled
 require("dotenv").config();
 
 const PREFIX = process.env.PREFIX || "!";
@@ -24,9 +25,10 @@ function loadCommands() {
 
 async function startBot() {
   const { state, saveCreds } = await useMultiFileAuthState("./auth");
+
   const sock = makeWASocket({
-    printQRInTerminal: true,
-    auth: state
+    auth: state,
+    ...P   // ✅ PRINT QR FIX
   });
 
   sock.ev.on("creds.update", saveCreds);
@@ -37,26 +39,22 @@ async function startBot() {
     const msg = messages[0];
     if (!msg.message) return;
 
-    const from = msg.key.remoteJid;
-    let text = msg.message.conversation || msg.message.extendedTextMessage?.text;
-    if (!text) return;
-
-    // Check prefix
+    const text = msg.message.conversation || "";
     if (!text.startsWith(PREFIX)) return;
 
     const args = text.slice(PREFIX.length).trim().split(/ +/);
-    const commandName = args.shift().toLowerCase();
+    const cmdName = args.shift().toLowerCase();
 
-    const command = commands[commandName];
-    if (!command) return;
-
-    try {
-      await command.run({ sock, msg, from, args });
-    } catch (err) {
-      console.log("Command error:", err);
-      await sock.sendMessage(from, { text: "❌ Error running command." });
+    if (commands[cmdName]) {
+      try {
+        await commands[cmdName].execute(sock, msg, args);
+      } catch (err) {
+        console.log("Command error:", err);
+      }
     }
   });
+
+  console.log("Bot started successfully.");
 }
 
 startBot();
