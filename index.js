@@ -1,48 +1,62 @@
-const {
-    default: makeWASocket,
-    useMultiFileAuthState,
-    DisconnectReason
-} = require("@whiskeysockets/baileys");
-
-const qrcode = require("qrcode-terminal");
+const makeWASocket = require('@whiskeysockets/baileys').default;
+const { useMultiFileAuthState } = require('@whiskeysockets/baileys');
+const fs = require("fs");
+const path = require("path");
 require("dotenv").config();
 
+const PREFIX = process.env.PREFIX || "!";
+const OWNER = process.env.OWNER_NUMBER;
+
+// Load all commands dynamically
+function loadCommands() {
+  const commands = {};
+  const dirPath = path.join(__dirname, "commands");
+
+  fs.readdirSync(dirPath).forEach(file => {
+    if (file.endsWith(".js")) {
+      const cmd = require(path.join(dirPath, file));
+      commands[cmd.name] = cmd;
+    }
+  });
+
+  return commands;
+}
+
 async function startBot() {
-    const { state, saveCreds } = await useMultiFileAuthState("./session");
+  const { state, saveCreds } = await useMultiFileAuthState("./auth");
+  const sock = makeWASocket({
+    printQRInTerminal: true,
+    auth: state
+  });
 
-    const sock = makeWASocket({
-        printQRInTerminal: true,
-        auth: state
-    });
+  sock.ev.on("creds.update", saveCreds);
 
-    sock.ev.on("creds.update", saveCreds);
+  const commands = loadCommands();
 
-    sock.ev.on("connection.update", ({ connection, lastDisconnect }) => {
-        if (connection === "close") {
-            const reason = lastDisconnect?.error?.output?.statusCode;
-            if (reason !== DisconnectReason.loggedOut) {
-                startBot();
-            } else {
-                console.log("Logged out.");
-            }
-        } else if (connection === "open") {
-            console.log("Bot is online!");
-        }
-    });
+  sock.ev.on("messages.upsert", async ({ messages }) => {
+    const msg = messages[0];
+    if (!msg.message) return;
 
-    // Basic command
-    sock.ev.on("messages.upsert", async ({ messages }) => {
-        const msg = messages[0];
-        const text = msg.message?.conversation;
+    const from = msg.key.remoteJid;
+    let text = msg.message.conversation || msg.message.extendedTextMessage?.text;
+    if (!text) return;
 
-        if (!text) return;
+    // Check prefix
+    if (!text.startsWith(PREFIX)) return;
 
-        if (text.toLowerCase() === "hi") {
-            await sock.sendMessage(msg.key.remoteJid, {
-                text: "Hello Gentle Yolo! 😎 Your bot is working."
-            });
-        }
-    });
+    const args = text.slice(PREFIX.length).trim().split(/ +/);
+    const commandName = args.shift().toLowerCase();
+
+    const command = commands[commandName];
+    if (!command) return;
+
+    try {
+      await command.run({ sock, msg, from, args });
+    } catch (err) {
+      console.log("Command error:", err);
+      await sock.sendMessage(from, { text: "❌ Error running command." });
+    }
+  });
 }
 
 startBot();
